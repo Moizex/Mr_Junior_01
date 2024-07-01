@@ -9,3 +9,4 @@ width = 1280
 height = 720
 background = (0, 145, 145)
 fps = 60
+height_void = 994

@@ -1,5 +1,10 @@
+from random import randint
+
 import pygame
+
+from codigos.timer import *
 from configs import *
+from math import sin
 
 
 class Sprite(pygame.sprite.Sprite):
@@ -8,6 +13,47 @@ class Sprite(pygame.sprite.Sprite):
         self.image = surf
         self.rect = self.image.get_rect(bottomleft=pos)
 
+
+class Bala(Sprite):
+    def __init__(self, surf, pos, direction, groups):
+        super().__init__(pos, surf, groups)
+
+        #ajuste
+        self.image = pygame.transform.flip(self.image, direction == -1, False)
+
+        # movimentação
+        self.direction = direction
+        self.speed = 600
+
+    def update(self, dt):
+        self.rect.x += self.direction * self.speed * dt
+
+class Fogo(Sprite):
+    def __init__(self, surf, pos, groups, player):
+        super().__init__(pos,surf,groups)
+        self.image = surf
+        self.rect = self.image.get_frect(topleft = pos)
+        self.player = player
+        self.flip = player.flip
+        self.timer = Timer(100, autostart= True, func= self.kill)
+        self.y_offset = pygame.Vector2(0,8)
+
+        if self.player.flip:
+            self.rect.midright = self.player.rect.midleft + self.y_offset
+            self.image = pygame.transform.flip(self.image, True,False)
+        else:
+            self.rect.midleft = self.player.rect.midright + self.y_offset
+
+    def update(self,_):
+        self.timer.update()
+
+        if self.player.flip:
+            self.rect.midright = self.player.rect.midleft + self.y_offset
+        else:
+            self.rect.midleft = self.player.rect.midright + self.y_offset
+
+        if self.flip != self.player.flip:
+            self.kill()
 
 class AnimetedSprite(Sprite):
     def __init__(self, frames, pos, groups):
@@ -18,51 +64,109 @@ class AnimetedSprite(Sprite):
         self.frame_index += self.animation_speed * dt
         self.image = self.frames[int(self.frame_index) % len(self.frames)]
 
+class Inimigo(AnimetedSprite):
+    def __init__(self, frames, pos, groups):
+        super().__init__(frames, pos, groups)
+        self.death_timer = Timer(200, func = self.kill)
+
+    def destroy(self):
+        self.kill()
+        self.animation_speed = 0
+        self.image = pygame.mask.from_surface(self.image).to_surface()
+        self.image.set_colorkey('black')
+
+    def update(self, dt):
+        if not self.death_timer:
+            self.move(dt)
+            self.animated(dt)
+        self.constraint()
+
+class Esqueleto(Inimigo):
+    def __init__(self, frames, pos, groups, speed):
+        super().__init__(frames, pos, groups)
+        self.speed = speed
+        self.amplitude = randint(500,600)
+        self.frequency = randint(300,600)
+
+
+    def move(self, dt):
+        self.rect.x -= self.speed * dt
+        self.rect.y += sin(pygame.time.get_ticks() / self.frequency) * self.amplitude * dt
+
+    def constraint(self):
+        if self.rect.right <= 0:
+            self.kill()
+
+class Olho(Inimigo):
+    def __init__(self, frames, rect, groups, speed):
+        super().__init__(frames, rect.topleft, groups)
+        self.rect.bottomleft = rect.bottomleft
+        self.main_rect = rect
+        self.speed = randint(160,180)
+        self.direction = 1
+
+
+    def move(self, dt):
+        self.rect.x += self.direction * self.speed * dt
+
+
+    def constraint(self):
+        if not self.main_rect.contains(self.rect):
+            self.direction *= -1
+            self.frames = [pygame.transform.flip(surf, True, False) for surf in self.frames]
 
 class Player(AnimetedSprite):
-    # Criando função para os sprites e as variáveis do player
-    def __init__(self, pos, groups, collision_sprites, frames):
-        #surf = pygame.Surface((40, 20))
+    def __init__(self, pos, groups, collision_sprites, frames, manipulador_entrada, criar_bala):
         super().__init__(frames, pos, groups)
+        self.flip = False
+        self.criar_bala = criar_bala
         self.images_right = []
         self.images_left = []
         self.index = 0
-
-        for num in range(0, 17):
-            img_right = pygame.image.load(f'imagens/boneco/{num}.png').convert_alpha()
-            self.images_right.append(img_right)
-            img_left = pygame.transform.flip(img_right, True, False)
-            self.images_left.append(img_left)
-
-        self.image = self.images_right[self.index]
-        self.rect = self.image.get_rect(bottomleft=pos)
-
-        # Movimentação e colisão
         self.direction = pygame.Vector2()
         self.collision_sprites = collision_sprites
-        self.speed = 200  # Velocidade que o boneco anda
-        self.gravity = 50
-        self.direction.y = 0  # Velocidade de pulo e queda
+        self.speed = 200
+        self.gravity = 40
+        self.direction.y = 0
         self.pulo = False
-        self.no_chao = False  # Variável para verificar se o player está no chão
+        self.no_chao = False
         self.facing_right = True
+        self.manipulador_entrada = manipulador_entrada
+
+
+        # bala time
+        self.shoot_timer = Timer(500)
+
+    def get_bala_origem(self):
+        if self.flip:
+            return self.rect.left, self.rect.centery
+        else:
+            return self.rect.right, self.rect.centery
 
     def move(self, dt):
-        # Horizontal
         self.rect.x += self.direction.x * self.speed * dt
         self.collision('horizontal')
 
-        # Vertical
-        self.direction.y += self.gravity * dt  # Adiciona gravidade
+        if self.no_chao:
+            self.gravity = 0
+        else:
+            self.gravity = 40
+
+        self.direction.y += self.gravity * dt
         self.rect.y += self.direction.y
         self.collision('vertical')
 
     def input(self):
+        self.direction.x = self.manipulador_entrada.get_horizontal()
         keys = pygame.key.get_pressed()
-        self.direction.x = int(keys[pygame.K_RIGHT]) - int(keys[pygame.K_LEFT])
-        if keys[pygame.K_SPACE] and self.no_chao:
-            self.direction.y = -15  # Altura do pulo
-            self.pulo = True  # Limitar pulo infinito
+        if self.manipulador_entrada.pulo() and self.no_chao:
+            self.direction.y = -11
+            self.pulo = True
+
+        if keys[pygame.K_h] and not self.shoot_timer:
+            bala_origem = self.get_bala_origem()
+            self.criar_bala(self.rect.center, -1 if self.flip else 1)
+            self.shoot_timer.activate()
 
     def collision(self, direction):
         for sprite in self.collision_sprites:
@@ -73,8 +177,10 @@ class Player(AnimetedSprite):
                     if self.direction.x < 0:
                         self.rect.left = sprite.rect.right
                 if direction == 'vertical':
-                    if self.direction.y > 0: self.rect.bottom = sprite.rect.top
-                    if self.direction.y < 0: self.rect.top = sprite.rect.bottom
+                    if self.direction.y > 0:
+                        self.rect.bottom = sprite.rect.top
+                    if self.direction.y < 0:
+                        self.rect.top = sprite.rect.bottom
                     self.direction.y = 0
 
     def verificar_chao(self):
@@ -85,42 +191,19 @@ class Player(AnimetedSprite):
         return False
 
     def update(self, dt):
+        self.shoot_timer.update()
         self.no_chao = self.verificar_chao()
         self.input()
         self.move(dt)
-        self.animate()
+        self.animate(dt)
 
-    def animate(self):
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]:
-            if keys[pygame.K_RIGHT] and keys[pygame.K_LEFT]:
-                self.index = 0
-            else:
-                self.index += 1
-            if self.index >= len(self.images_right):
-                self.index = 0
-            if keys[pygame.K_LEFT]:
-                self.image = self.images_left[self.index]
-                self.facing_right = False
-            elif keys[pygame.K_RIGHT]:
-                self.image = self.images_right[self.index]
-                self.facing_right = True
-        if not (keys[pygame.K_LEFT] or keys[pygame.K_RIGHT] or self.pulo):
-            self.index = 1
-            self.image = self.images_right[self.index] if self.facing_right else self.images_left[self.index]
+    def animate(self, dt):
+        if self.direction.x:
+            self.frame_index += self.animation_speed * dt
+            self.flip = self.direction.x < 0
+        else:
+            self.frame_index = 0
 
-# Certifique-se de que as constantes width, height, fps, tile_size, background estejam definidas em configs.py
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        self.frame_index = 7 if not self.no_chao else self.frame_index
+        self.image = self.frames[int(self.frame_index) % len(self.frames)]
+        self.image = pygame.transform.flip(self.image, self.flip, False)
